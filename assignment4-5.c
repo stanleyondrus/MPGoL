@@ -58,6 +58,8 @@ void alloc_bool_arr_2d(bool ***uni, int rows, int cols);
 void init_universe(bool ***uni, int rows, int cols);
 void free_bool_arr_2d(bool ***uni, int rows);
 
+void universe_tick(bool ***old_uni, int rows, int cols, int rank, int num_ranks);
+
 
 /***************************************************************************/
 /* Function: Main **********************************************************/
@@ -94,8 +96,9 @@ int main(int argc, char *argv[])
     // Set all 
     init_universe(&universe, rows_per_rank + 2, uni_cols);
 
-    for (int t = 0; t < gol_ticks; t++) {
-        universe_tick()
+    for (int t = 0; t < 1; t++) {
+        universe_tick(&universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks);
+        // Write to file
     }
     
     // Clean up dynamically allocated variables
@@ -111,7 +114,42 @@ int main(int argc, char *argv[])
 /* Other Functions - You write as part of the assignment********************/
 /***************************************************************************/
 
-void update_state(bool **rowin, bool **rowout) {
+void universe_tick(bool ***old_uni, int rows, int cols, int rank, int num_ranks) {
+    bool *tg_row = (bool *)calloc(cols, sizeof(bool));
+    bool *bg_row = (bool *)calloc(cols, sizeof(bool));
+    MPI_Request tg_req;
+    MPI_Request bg_req;
+    MPI_Status status1;
+    MPI_Status status2;
+
+    if (rank > 0) {
+        // Recieve row from rank above, store in first "ghost" row
+        MPI_Irecv(tg_row, cols, MPI_UNSIGNED_SHORT, rank - 1, 1, MPI_COMM_WORLD, &tg_req);
+
+        // Send "first" row to rank above
+        bool *f_row = (*old_uni)[1];
+        printf("%hu", f_row[0]);
+        MPI_Request req1;
+        MPI_Isend(f_row, cols, MPI_UNSIGNED_SHORT, rank - 1, 0, MPI_COMM_WORLD, &req1);
+    }
+    if (rank < num_ranks - 1) {
+        // Recieve row from rank below, store in last "ghost" row
+        MPI_Irecv(bg_row, cols, MPI_UNSIGNED_SHORT, rank + 1, 0, MPI_COMM_WORLD, &bg_req);
+
+        // Send "last" row to rank below
+        bool *l_row = (*old_uni)[rows - 2];
+        MPI_Request req2;
+        MPI_Isend(l_row, cols, MPI_UNSIGNED_SHORT, rank + 1, 1, MPI_COMM_WORLD, &req2);
+    }
+
+    if (rank > 0) {
+        MPI_Wait(&tg_req, &status1);
+        printf("Rank %d recieved top ghost row - %hu\n", rank, tg_row[1]);
+    }
+    if (rank < num_ranks - 1) {
+        MPI_Wait(&bg_req, &status2);
+        printf("Rank %d recieved bottom ghost row - %hu\n", rank, bg_row[0]);
+    }
 
 }
 
