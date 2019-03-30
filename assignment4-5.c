@@ -52,7 +52,7 @@ unsigned long long g_end_cycles=0;
 
 void update_state(bool **rowin, bool **rowout);
 
-void init_universe(bool **uni, int rows, int cols);
+void init_universe(bool ***uni, int rows, int cols);
 
 
 /***************************************************************************/
@@ -61,35 +61,35 @@ void init_universe(bool **uni, int rows, int cols);
 
 int main(int argc, char *argv[])
 {
-//    int i = 0;
+    //    int i = 0;
     int mpi_myrank;
     int mpi_commsize;
-// Example MPI startup and using CLCG4 RNG
+    // Example MPI startup and using CLCG4 RNG
     MPI_Init( &argc, &argv);
     MPI_Comm_size( MPI_COMM_WORLD, &mpi_commsize);
     MPI_Comm_rank( MPI_COMM_WORLD, &mpi_myrank);
     
-// Init 32,768 RNG streams - each rank has an independent stream
+    // Init 32,768 RNG streams - each rank has an independent stream
     InitDefault();
     
-// Note, used the mpi_myrank to select which RNG stream to use.
-// You must replace mpi_myrank with the right row being used.
-// This just show you how to call the RNG.    
+    // Note, used the mpi_myrank to select which RNG stream to use.
+    // You must replace mpi_myrank with the right row being used.
+    // This just show you how to call the RNG.    
     printf("Rank %d of %d has been started and a first Random Value of %lf\n", 
 	   mpi_myrank, mpi_commsize, GenVal(mpi_myrank));
     
     MPI_Barrier( MPI_COMM_WORLD );
     
-// Insert your code
+    // Insert your code
     bool **universe;
-    init_universe(universe, 10, 10);
+    init_universe(&universe, 10, 10);
     for (int i = 0; i < 10; i++) {
         for (int j = 0; j < 10; j++) {
             printf("%hu", universe[i][j]);
         }
     }
 
-// END -Perform a barrier and then leave MPI
+    // END -Perform a barrier and then leave MPI
     MPI_Barrier( MPI_COMM_WORLD );
     MPI_Finalize();
     return 0;
@@ -103,12 +103,12 @@ void update_state(bool **rowin, bool **rowout) {
 
 }
 
-void init_universe(bool **uni, int rows, int cols) {
-    uni = (bool**)calloc(rows, sizeof(bool*));
+void init_universe(bool ***uni, int rows, int cols) {
+    *uni = (bool **)calloc(rows, sizeof(bool*));
     for (int i = 0; i < rows; i++) {
-        uni[i] = (bool*)calloc(cols, sizeof(bool));
+        (*uni)[i] = (bool *)calloc(cols, sizeof(bool));
         for (int j = 0; j < cols; j++) {
-            uni[i][j] = ALIVE;
+            (*uni)[i][j] = ALIVE;
         }
     }
 }
