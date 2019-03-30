@@ -43,7 +43,9 @@ double g_processor_frequency = 1600000000.0; // processing speed for BG/Q
 unsigned long long g_start_cycles=0;
 unsigned long long g_end_cycles=0;
 
-// You define these
+int uni_rows = 1024;
+int uni_cols = 1024;
+int gol_ticks = 10;
 
 
 /***************************************************************************/
@@ -52,7 +54,9 @@ unsigned long long g_end_cycles=0;
 
 void update_state(bool **rowin, bool **rowout);
 
+void alloc_bool_arr_2d(bool ***uni, int rows, int cols);
 void init_universe(bool ***uni, int rows, int cols);
+void free_bool_arr_2d(bool ***uni, int rows);
 
 
 /***************************************************************************/
@@ -63,10 +67,10 @@ int main(int argc, char *argv[])
 {
     //    int i = 0;
     int mpi_myrank;
-    int mpi_commsize;
+    int mpi_ranks;
     // Example MPI startup and using CLCG4 RNG
     MPI_Init( &argc, &argv);
-    MPI_Comm_size( MPI_COMM_WORLD, &mpi_commsize);
+    MPI_Comm_size( MPI_COMM_WORLD, &mpi_ranks);
     MPI_Comm_rank( MPI_COMM_WORLD, &mpi_myrank);
     
     // Init 32,768 RNG streams - each rank has an independent stream
@@ -76,18 +80,26 @@ int main(int argc, char *argv[])
     // You must replace mpi_myrank with the right row being used.
     // This just show you how to call the RNG.    
     printf("Rank %d of %d has been started and a first Random Value of %lf\n", 
-	   mpi_myrank, mpi_commsize, GenVal(mpi_myrank));
+	   mpi_myrank, mpi_ranks, GenVal(mpi_myrank));
     
     MPI_Barrier( MPI_COMM_WORLD );
-    
-    // Insert your code
+
+    // Start herevoid free_bool_arr_2d(bool ***uni, int rows)
+    int rows_per_rank = uni_rows / mpi_ranks;
+
+    // Allocate the universe array, split across MPI ranks (including "ghost" rows)
     bool **universe;
-    init_universe(&universe, 10, 10);
-    for (int i = 0; i < 10; i++) {
-        for (int j = 0; j < 10; j++) {
-            printf("%hu", universe[i][j]);
-        }
+    alloc_bool_arr_2d(&universe, rows_per_rank + 2, uni_cols);
+
+    // Set all 
+    init_universe(&universe, rows_per_rank + 2, uni_cols);
+
+    for (int t = 0; t < gol_ticks; t++) {
+        universe_tick()
     }
+    
+    // Clean up dynamically allocated variables
+    free_bool_arr_2d(&universe, rows_per_rank + 2);
 
     // END -Perform a barrier and then leave MPI
     MPI_Barrier( MPI_COMM_WORLD );
@@ -104,11 +116,23 @@ void update_state(bool **rowin, bool **rowout) {
 }
 
 void init_universe(bool ***uni, int rows, int cols) {
-    *uni = (bool **)calloc(rows, sizeof(bool*));
     for (int i = 0; i < rows; i++) {
-        (*uni)[i] = (bool *)calloc(cols, sizeof(bool));
         for (int j = 0; j < cols; j++) {
             (*uni)[i][j] = ALIVE;
         }
     }
+}
+
+void alloc_bool_arr_2d(bool ***uni, int rows, int cols) {
+    *uni = (bool **)calloc(rows, sizeof(bool*));
+    for (int i = 0; i < rows; i++) {
+        (*uni)[i] = (bool *)calloc(cols, sizeof(bool));
+    }
+}
+
+void free_bool_arr_2d(bool ***uni, int rows) {
+    for (int i = 0; i < rows; i++) {
+        free((*uni)[i]);
+    }
+    free(*uni);
 }
