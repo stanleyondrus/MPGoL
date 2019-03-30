@@ -32,6 +32,7 @@
 
 #define ALIVE 1
 #define DEAD  0
+#define bool unsigned short int
 
 /***************************************************************************/
 /* Global Vars *************************************************************/
@@ -49,7 +50,9 @@ unsigned long long g_end_cycles=0;
 /* Function Decs ***********************************************************/
 /***************************************************************************/
 
-// You define these
+void update_state(bool **rowin, bool **rowout);
+
+void init_universe(bool **uni, int rows, int cols);
 
 
 /***************************************************************************/
@@ -78,7 +81,13 @@ int main(int argc, char *argv[])
     MPI_Barrier( MPI_COMM_WORLD );
     
 // Insert your code
-    
+    bool **universe;
+    init_universe(universe, 10, 10);
+    for (int i = 0; i < 10; i++) {
+        for (int j = 0; j < 10; j++) {
+            printf("%hu", universe[i][j]);
+        }
+    }
 
 // END -Perform a barrier and then leave MPI
     MPI_Barrier( MPI_COMM_WORLD );
@@ -89,3 +98,17 @@ int main(int argc, char *argv[])
 /***************************************************************************/
 /* Other Functions - You write as part of the assignment********************/
 /***************************************************************************/
+
+void update_state(bool **rowin, bool **rowout) {
+
+}
+
+void init_universe(bool **uni, int rows, int cols) {
+    uni = (bool**)calloc(rows, sizeof(bool*));
+    for (int i = 0; i < rows; i++) {
+        uni[i] = (bool*)calloc(cols, sizeof(bool));
+        for (int j = 0; j < cols; j++) {
+            uni[i][j] = ALIVE;
+        }
+    }
+}
