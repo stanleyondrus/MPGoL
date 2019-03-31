@@ -32,7 +32,7 @@
 
 #define ALIVE 1
 #define DEAD  0
-#define bool unsigned short int
+typedef unsigned short int bool;
 
 /***************************************************************************/
 /* Global Vars *************************************************************/
@@ -52,13 +52,15 @@ int gol_ticks = 10;
 /* Function Decs ***********************************************************/
 /***************************************************************************/
 
-void update_state(bool **rowin, bool **rowout);
-
-void alloc_bool_arr_2d(bool ***uni, int rows, int cols);
-void init_universe(bool ***uni, int rows, int cols);
-void free_bool_arr_2d(bool ***uni, int rows);
-
-void universe_tick(bool ***old_uni, int rows, int cols, int rank, int num_ranks);
+bool **alloc_bool_arr_2d(int rows, int cols);
+void init_universe(bool **uni, int rows, int cols);
+void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks);
+void update_universe_state(bool **old_uni, int rows, int cols, int rank, int num_ranks, double thresh);
+bool life_lotto(Gen seed);
+bool cell_next_state(int i, int j, bool **uni, int rows, int cols);
+int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols);
+void print_some_universe(bool **uni);
+void free_bool_arr_2d(bool **uni, int rows);
 
 
 /***************************************************************************/
@@ -67,7 +69,6 @@ void universe_tick(bool ***old_uni, int rows, int cols, int rank, int num_ranks)
 
 int main(int argc, char *argv[])
 {
-    //    int i = 0;
     int mpi_myrank;
     int mpi_ranks;
     // Example MPI startup and using CLCG4 RNG
@@ -86,23 +87,31 @@ int main(int argc, char *argv[])
     
     MPI_Barrier( MPI_COMM_WORLD );
 
-    // Start herevoid free_bool_arr_2d(bool ***uni, int rows)
+    // Start here
     int rows_per_rank = uni_rows / mpi_ranks;
 
-    // Allocate the universe array, split across MPI ranks (including "ghost" rows)
-    bool **universe;
-    alloc_bool_arr_2d(&universe, rows_per_rank + 2, uni_cols);
+    // Initialize universe to all cells alive
+    bool **universe = alloc_bool_arr_2d(rows_per_rank + 2, uni_cols);
+    init_universe(universe, rows_per_rank + 2, uni_cols);
 
-    // Set all 
-    init_universe(&universe, rows_per_rank + 2, uni_cols);
+    // TODO: Launch pthreads
 
-    for (int t = 0; t < 1; t++) {
-        universe_tick(&universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks);
-        // Write to file
+    // Run GoL simulation
+    for (int t = 0; t < 1000; t++) {
+        sync_ghost_rows(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks);
+        if (t == 0)
+            update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks, 0.70f);
+        else
+            update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks, 0.0f);
+        if (mpi_myrank == 0 && t%100 == 0) {
+            printf("Tick: %d\n", t);
+            print_some_universe(universe);
+        }
+        // TODO: Write current state to file
     }
-    
+
     // Clean up dynamically allocated variables
-    free_bool_arr_2d(&universe, rows_per_rank + 2);
+    free_bool_arr_2d(universe, rows_per_rank + 2);
 
     // END -Perform a barrier and then leave MPI
     MPI_Barrier( MPI_COMM_WORLD );
@@ -114,9 +123,58 @@ int main(int argc, char *argv[])
 /* Other Functions - You write as part of the assignment********************/
 /***************************************************************************/
 
-void universe_tick(bool ***old_uni, int rows, int cols, int rank, int num_ranks) {
-    bool *tg_row = (bool *)calloc(cols, sizeof(bool));
-    bool *bg_row = (bool *)calloc(cols, sizeof(bool));
+void print_some_universe(bool **uni) {
+    for (int i = 0; i < 25; i++) {
+        for (int j = 0; j < 50; j++) {
+            if (uni[i][j] == ALIVE)
+                printf("*");
+            else
+                printf(" ");
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+/*
+ * Input:
+ *  thresh - Value between 0.0 and 1.0. Changes the occurrence of random chance
+ *          events where a cell is brought to live or killed.
+ * We assume the universe is padded with 2 ghost rows, at the first and last indices.
+ */
+void update_universe_state(bool **old_uni, int rows, int cols, int rank, int num_ranks, double thresh) {
+    bool **new_uni = alloc_bool_arr_2d(rows, cols);
+    for (int i = 0; i < rows; i++) {
+        int global_row_ind = i + (rank * (rows - 2));
+        for (int j = 0; j < cols; j++) {
+            double random_chance = GenVal(global_row_ind);
+            if (random_chance < thresh)
+                new_uni[i][j] = life_lotto(global_row_ind);
+            else
+                new_uni[i][j] = cell_next_state(i, j, old_uni, rows, cols);
+        }
+    }
+
+    // Copy new universe state into existing array
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            old_uni[i][j] = new_uni[i][j];
+        }
+    }
+
+    free_bool_arr_2d(new_uni, rows);
+}
+
+bool life_lotto(Gen seed) {
+    double chance = GenVal(seed);
+    if (chance > 0.5f)
+        return ALIVE;
+    return DEAD;
+}
+
+void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks) {
+    bool *tg_row = old_uni[0];
+    bool *bg_row = old_uni[rows-1];
     MPI_Request tg_req;
     MPI_Request bg_req;
     MPI_Status status1;
@@ -127,8 +185,7 @@ void universe_tick(bool ***old_uni, int rows, int cols, int rank, int num_ranks)
         MPI_Irecv(tg_row, cols, MPI_UNSIGNED_SHORT, rank - 1, 1, MPI_COMM_WORLD, &tg_req);
 
         // Send "first" row to rank above
-        bool *f_row = (*old_uni)[1];
-        printf("%hu", f_row[0]);
+        bool *f_row = old_uni[1];
         MPI_Request req1;
         MPI_Isend(f_row, cols, MPI_UNSIGNED_SHORT, rank - 1, 0, MPI_COMM_WORLD, &req1);
     }
@@ -137,40 +194,76 @@ void universe_tick(bool ***old_uni, int rows, int cols, int rank, int num_ranks)
         MPI_Irecv(bg_row, cols, MPI_UNSIGNED_SHORT, rank + 1, 0, MPI_COMM_WORLD, &bg_req);
 
         // Send "last" row to rank below
-        bool *l_row = (*old_uni)[rows - 2];
+        bool *l_row = old_uni[rows - 2];
         MPI_Request req2;
         MPI_Isend(l_row, cols, MPI_UNSIGNED_SHORT, rank + 1, 1, MPI_COMM_WORLD, &req2);
     }
 
     if (rank > 0) {
         MPI_Wait(&tg_req, &status1);
-        printf("Rank %d recieved top ghost row - %hu\n", rank, tg_row[1]);
+        // printf("Rank %d recieved top ghost row\n", rank);
     }
     if (rank < num_ranks - 1) {
         MPI_Wait(&bg_req, &status2);
-        printf("Rank %d recieved bottom ghost row - %hu\n", rank, bg_row[0]);
+        // printf("Rank %d recieved bottom ghost row\n", rank);
     }
+}
+
+int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols) {
+    int count = 0;
+    for (int i = i_in - 1; i < i_in + 2; i++) {
+        for (int j = j_in-1; j < j_in + 2; j++) {
+            if (i > 0 
+                && j > 0 
+                && i < rows 
+                && j < cols
+                && !(j==j_in && i==i_in)
+                && uni[i][j] == ALIVE) {
+                count++;
+            }
+        }
+    }
+    return count;
 
 }
 
-void init_universe(bool ***uni, int rows, int cols) {
+// 
+bool cell_next_state(int i, int j, bool **uni, int rows, int cols) {
+    // • Any live cell with fewer than two live neighbors dies, as if caused by under-population.
+    // • Any live cell with more than three live neighbors dies, as if by over-population.
+    // • Any live cell with two or three live neighbors lives on to the next generation.
+    // • Any dead cell with exactly three live neighbors becomes a live cell, as if by reproduction
+    int neighbors = neighbor_count(i, j, uni, rows, cols);
+    int is_alive = uni[i][j];
+    if (is_alive == ALIVE) {
+        if (neighbors < 2 || neighbors > 3) 
+            return DEAD;
+    } else {
+        if (neighbors == 3)
+            return ALIVE;
+    }
+    return is_alive;
+}
+
+void init_universe(bool **uni, int rows, int cols) {
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
-            (*uni)[i][j] = ALIVE;
+            uni[i][j] = ALIVE;
         }
     }
 }
 
-void alloc_bool_arr_2d(bool ***uni, int rows, int cols) {
-    *uni = (bool **)calloc(rows, sizeof(bool*));
+bool **alloc_bool_arr_2d(int rows, int cols) {
+    bool **uni = (bool **)calloc(rows, sizeof(bool*));
     for (int i = 0; i < rows; i++) {
-        (*uni)[i] = (bool *)calloc(cols, sizeof(bool));
+        uni[i] = (bool *)calloc(cols, sizeof(bool));
     }
+    return uni;
 }
 
-void free_bool_arr_2d(bool ***uni, int rows) {
+void free_bool_arr_2d(bool **uni, int rows) {
     for (int i = 0; i < rows; i++) {
-        free((*uni)[i]);
+        free(uni[i]);
     }
-    free(*uni);
+    free(uni);
 }
