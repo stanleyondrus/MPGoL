@@ -32,6 +32,8 @@
 
 #define ALIVE 1
 #define DEAD  0
+#define NUM_TICKS 100
+#define NUM_THREADS 3
 typedef unsigned short int bool;
 
 /***************************************************************************/
@@ -47,6 +49,12 @@ int uni_rows = 1024;
 int uni_cols = 1024;
 int gol_ticks = 10;
 
+int mpi_myrank;
+int mpi_ranks;
+
+int rows_per_rank;
+
+bool **universe;
 
 /***************************************************************************/
 /* Function Decs ***********************************************************/
@@ -58,7 +66,7 @@ void init_universe(bool **uni, int rows, int cols);
 
 void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks);
 
-void update_universe_state(bool **old_uni, int rows, int cols, int rank, int num_ranks, double thresh);
+void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thread_id, double thresh);
 
 bool life_lotto(Gen seed);
 
@@ -77,8 +85,6 @@ void *threadFunction(void *arg);
 /***************************************************************************/
 
 int main(int argc, char *argv[]) {
-    int mpi_myrank;
-    int mpi_ranks;
     // Example MPI startup and using CLCG4 RNG
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &mpi_ranks);
@@ -96,15 +102,15 @@ int main(int argc, char *argv[]) {
     MPI_Barrier(MPI_COMM_WORLD);
 
     // Start here
-    int rows_per_rank = uni_rows / mpi_ranks;
+    rows_per_rank = uni_rows / mpi_ranks;
 
     // Initialize universe to all cells alive
-    bool **universe = alloc_bool_arr_2d(rows_per_rank + 2, uni_cols);
+    universe = alloc_bool_arr_2d(rows_per_rank + 2, uni_cols);
     init_universe(universe, rows_per_rank + 2, uni_cols);
 
     // TODO: Launch pthreads
 
-    int thread_count = 63;
+    int thread_count = NUM_THREADS - 1;
     pthread_t tid[thread_count];
     int tid_index = 0;
     int rc;
@@ -112,24 +118,27 @@ int main(int argc, char *argv[]) {
     bool *arg = malloc(sizeof(bool));
     *arg = 69;
 
+    int rows_per_thread = uni_rows / NUM_THREADS;
+
     for (int i = 0; i < thread_count; i++) {
-        rc = pthread_create(&tid[tid_index], NULL, threadFunction, arg);
+        int *thread_id = malloc(sizeof(int));
+        *thread_id = i;
+        rc = pthread_create(&tid[tid_index], NULL, threadFunction, thread_id);
         if (rc != 0) { printf("Could not create thread"); }
         tid_index++;
     }
 
     // Run GoL simulation
-    for (int t = 0; t < 1000; t++) {
+    for (int t = 0; t < NUM_TICKS; t++) {
         sync_ghost_rows(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks);
         if (t == 0) {
             update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks, 0.70f);
-        }
-        else {
+        } else {
             update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks, 0.0f);
         }
         if (mpi_myrank == 0 && t % 100 == 0) {
             printf("Tick: %d\n", t);
-            print_some_universe(universe);
+//            print_some_universe(universe);
         }
         // TODO: Write current state to file
 
@@ -145,11 +154,11 @@ int main(int argc, char *argv[]) {
     }
 
 
-    bool *ret_val;
+    int *ret_val;
     for (int i = 0; i < tid_index; i++) {
         rc = pthread_join(tid[i], (void **) &ret_val);
         if (rc != 0) { printf("Could not join thread"); }
-        printf("THREAD %ld: Thread [%ld] joined (returned %hu)\n", pthread_self(), tid[i], *ret_val);
+        printf("THREAD %ld: Thread [%ld] joined (returned %d)\n", pthread_self(), tid[i], *ret_val);
     }
     free(ret_val);
 
@@ -168,9 +177,16 @@ int main(int argc, char *argv[]) {
 /***************************************************************************/
 
 void *threadFunction(void *arg) {
-    bool *b = (bool *) arg;
+    int *thread_id = (int *) arg;
 
-    pthread_exit(b);
+    printf("RANK %d THREAD %ld THREAD_ID %d\n", mpi_myrank, pthread_self(), *thread_id);
+
+    for (int t = 0; t < NUM_TICKS; t++) {
+        update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, *thread_id, (t == 0) ? 0.70f : 0.0f);
+    }
+
+//    free(arg);
+    pthread_exit(thread_id);
 }
 
 void print_some_universe(bool **uni) {
@@ -192,7 +208,9 @@ void print_some_universe(bool **uni) {
  *          events where a cell is brought to live or killed.
  * We assume the universe is padded with 2 ghost rows, at the first and last indices.
  */
-void update_universe_state(bool **old_uni, int rows, int cols, int rank, int num_ranks, double thresh) {
+void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thread_id, double thresh) {
+    printf("UPDATING UNIVERSE AT RANK %d THREAD_ID %d THRESH %f\n", rank, thread_id, thresh);
+
     bool **new_uni = alloc_bool_arr_2d(rows, cols);
     for (int i = 0; i < rows; i++) {
         int global_row_ind = i + (rank * (rows - 2));
