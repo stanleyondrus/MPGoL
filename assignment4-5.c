@@ -33,7 +33,7 @@
 #define ALIVE 1
 #define DEAD  0
 #define NUM_TICKS 100
-#define NUM_THREADS 3
+#define NUM_THREADS 16
 typedef unsigned short int bool;
 
 /***************************************************************************/
@@ -52,7 +52,8 @@ int gol_ticks = 10;
 int mpi_myrank;
 int mpi_ranks;
 
-int rows_per_rank;
+int rows_per_rank; // TODO: probably take this one out
+int rows_per_thread;
 
 bool **universe;
 
@@ -118,11 +119,11 @@ int main(int argc, char *argv[]) {
     bool *arg = malloc(sizeof(bool));
     *arg = 69;
 
-    int rows_per_thread = uni_rows / NUM_THREADS;
+    rows_per_thread = uni_rows / (NUM_THREADS * mpi_ranks);
 
     for (int i = 0; i < thread_count; i++) {
         int *thread_id = malloc(sizeof(int));
-        *thread_id = i;
+        *thread_id = i+1;
         rc = pthread_create(&tid[tid_index], NULL, threadFunction, thread_id);
         if (rc != 0) { printf("Could not create thread"); }
         tid_index++;
@@ -132,13 +133,16 @@ int main(int argc, char *argv[]) {
     for (int t = 0; t < NUM_TICKS; t++) {
         sync_ghost_rows(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks);
         if (t == 0) {
-            update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks, 0.70f);
+            // ranks are considered thread 0
+//          update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, 0, 0.70f);
+            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.70f);
         } else {
-            update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks, 0.0f);
+//          update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, 0, 0.0f);
+            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.0f);
         }
         if (mpi_myrank == 0 && t % 100 == 0) {
             printf("Tick: %d\n", t);
-//            print_some_universe(universe);
+            print_some_universe(universe);
         }
         // TODO: Write current state to file
 
@@ -182,7 +186,7 @@ void *threadFunction(void *arg) {
     printf("RANK %d THREAD %ld THREAD_ID %d\n", mpi_myrank, pthread_self(), *thread_id);
 
     for (int t = 0; t < NUM_TICKS; t++) {
-        update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, *thread_id, (t == 0) ? 0.70f : 0.0f);
+        update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, *thread_id, (t == 0) ? 0.70f : 0.0f);
     }
 
 //    free(arg);
@@ -213,7 +217,9 @@ void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thr
 
     bool **new_uni = alloc_bool_arr_2d(rows, cols);
     for (int i = 0; i < rows; i++) {
-        int global_row_ind = i + (rank * (rows - 2));
+//      int global_row_ind = i + (rank * (rows - 2));
+	int global_row_ind = i + ((rank + thread_id) * (rows - 2));
+	printf("rank %d, rows %d, thread_id %d, global row_ind = %d \n", rank, rows, thread_id, global_row_ind);
         for (int j = 0; j < cols; j++) {
             double random_chance = GenVal(global_row_ind);
             if (random_chance < thresh)
