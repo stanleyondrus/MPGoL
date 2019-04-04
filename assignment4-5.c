@@ -12,6 +12,7 @@
 #include<string.h>
 #include<errno.h>
 #include<math.h>
+#include<unistd.h>
 
 #include<clcg4.h>
 
@@ -32,7 +33,7 @@
 
 #define ALIVE 1
 #define DEAD  0
-#define NUM_TICKS 100
+#define NUM_TICKS 256
 #define NUM_THREADS 16
 typedef unsigned short int bool;
 
@@ -45,9 +46,9 @@ double g_processor_frequency = 1600000000.0; // processing speed for BG/Q
 unsigned long long g_start_cycles = 0;
 unsigned long long g_end_cycles = 0;
 
-int uni_rows = 1024;
-int uni_cols = 1024;
-int gol_ticks = 10;
+int uni_rows = 32768;
+int uni_cols = 32768;
+int gol_ticks = 1;
 
 int mpi_myrank;
 int mpi_ranks;
@@ -56,6 +57,9 @@ int rows_per_rank; // TODO: probably take this one out
 int rows_per_thread;
 
 bool **universe;
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_barrier_t presync_barrier, barrier;
 
 /***************************************************************************/
 /* Function Decs ***********************************************************/
@@ -75,11 +79,13 @@ bool cell_next_state(int i, int j, bool **uni, int rows, int cols);
 
 int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols);
 
-void print_some_universe(bool **uni);
+void print_some_universe(bool **uni, int rows, int cols);
 
 void free_bool_arr_2d(bool **uni, int rows);
 
 void *threadFunction(void *arg);
+
+int mod(int a, int b);
 
 /***************************************************************************/
 /* Function: Main **********************************************************/
@@ -121,9 +127,11 @@ int main(int argc, char *argv[]) {
 
     rows_per_thread = uni_rows / (NUM_THREADS * mpi_ranks);
 
+    pthread_barrier_init(&presync_barrier, NULL, NUM_THREADS);
+
     for (int i = 0; i < thread_count; i++) {
         int *thread_id = malloc(sizeof(int));
-        *thread_id = i+1;
+        *thread_id = i + 1;
         rc = pthread_create(&tid[tid_index], NULL, threadFunction, thread_id);
         if (rc != 0) { printf("Could not create thread"); }
         tid_index++;
@@ -132,17 +140,21 @@ int main(int argc, char *argv[]) {
     // Run GoL simulation
     for (int t = 0; t < NUM_TICKS; t++) {
         sync_ghost_rows(universe, rows_per_rank + 2, uni_cols, mpi_myrank, mpi_ranks);
+        pthread_barrier_wait(&presync_barrier);
+//        pthread_barrier_init(&barrier, NULL, thread_count + 1);
+//        pthread_barrier_wait(&barrier);
         if (t == 0) {
             // ranks are considered thread 0
-//          update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, 0, 0.70f);
-            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.70f);
+            update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, 0, 0.70f);
+//            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.70f);
         } else {
-//          update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, 0, 0.0f);
-            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.0f);
+            update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, 0, 0.0f);
+//            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.0f);
         }
-        if (mpi_myrank == 0 && t % 100 == 0) {
+        pthread_barrier_wait(&presync_barrier);
+        if (mpi_myrank == 0 && t % 1 == 0) {
             printf("Tick: %d\n", t);
-            print_some_universe(universe);
+//            print_some_universe(universe, rows_per_rank + 2, uni_cols);
         }
         // TODO: Write current state to file
 
@@ -162,7 +174,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < tid_index; i++) {
         rc = pthread_join(tid[i], (void **) &ret_val);
         if (rc != 0) { printf("Could not join thread"); }
-        printf("THREAD %ld: Thread [%ld] joined (returned %d)\n", pthread_self(), tid[i], *ret_val);
+//        printf("THREAD %ld: Thread [%ld] joined (returned %d)\n", pthread_self(), tid[i], *ret_val);
     }
     free(ret_val);
 
@@ -180,22 +192,36 @@ int main(int argc, char *argv[]) {
 /* Other Functions - You write as part of the assignment********************/
 /***************************************************************************/
 
+int mod(int a, int b) {
+    int r = a % b;
+    return r < 0 ? r + b : r;
+}
+
 void *threadFunction(void *arg) {
     int *thread_id = (int *) arg;
 
-    printf("RANK %d THREAD %ld THREAD_ID %d\n", mpi_myrank, pthread_self(), *thread_id);
+//    printf("RANK %d THREAD %ld THREAD_ID %d\n", mpi_myrank, pthread_self(), *thread_id);
+
+//    pthread_mutex_lock(&mutex);
+//    pthread_mutex_unlock(&mutex);
+
 
     for (int t = 0; t < NUM_TICKS; t++) {
-        update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, *thread_id, (t == 0) ? 0.70f : 0.0f);
+        pthread_barrier_wait(&presync_barrier);
+//        printf("RANK %d THREAD %ld THREAD_ID %d iteration: %d\n", mpi_myrank, pthread_self(), *thread_id, t);
+        update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, *thread_id, (t == 0) ? 0.70f : 0.0f);
+        pthread_barrier_wait(&presync_barrier);
     }
 
 //    free(arg);
     pthread_exit(thread_id);
 }
 
-void print_some_universe(bool **uni) {
-    for (int i = 0; i < 25; i++) {
-        for (int j = 0; j < 50; j++) {
+void print_some_universe(bool **uni, int rows, int cols) {
+//    for (int i = 15; i < 25+15; i++) {
+//        for (int j = 0; j < 50; j++) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
             if (uni[i][j] == ALIVE)
                 printf("*");
             else
@@ -213,24 +239,36 @@ void print_some_universe(bool **uni) {
  * We assume the universe is padded with 2 ghost rows, at the first and last indices.
  */
 void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thread_id, double thresh) {
-    printf("UPDATING UNIVERSE AT RANK %d THREAD_ID %d THRESH %f\n", rank, thread_id, thresh);
+//    printf("UPDATING UNIVERSE AT RANK %d THREAD_ID %d THRESH %f\n", rank, thread_id, thresh);
 
     bool **new_uni = alloc_bool_arr_2d(rows, cols);
-    for (int i = 0; i < rows; i++) {
-//      int global_row_ind = i + (rank * (rows - 2));
-	int global_row_ind = i + ((rank + thread_id) * (rows - 2));
-	printf("rank %d, rows %d, thread_id %d, global row_ind = %d \n", rank, rows, thread_id, global_row_ind);
+
+    int start = thread_id * (rows_per_thread) + 1;
+    int end = (start + ((rows - 2) / NUM_THREADS));
+    if (thread_id == NUM_THREADS - 1) {
+        end = rows - 1;
+    }
+
+//    printf("For loop i=%d; i<%d\n", start, end);
+    for (int i = start; i < end; i++) {
+        int global_row_ind = i + (rank * (rows - 2));
+//        int global_row_ind = i + ((rank + thread_id) * (rows - 2));
+//        int global_row_ind = i + (((rank*NUM_THREADS) + thread_id) * (rows - 2));
+//        int global_row_ind = i + (((rank*NUM_THREADS) + thread_id) * (rows - 2));
+//        printf("rank %d, rows %d, thread_id %d, global row_ind = %d \n", rank, rows, thread_id, global_row_ind);
+//        printf("thread: %d, rows: %d, i: %d, global_row_ind: %d\n", thread_id, rows, i, global_row_ind);
         for (int j = 0; j < cols; j++) {
             double random_chance = GenVal(global_row_ind);
-            if (random_chance < thresh)
+            if (random_chance < thresh) {
                 new_uni[i][j] = life_lotto(global_row_ind);
-            else
+//                printf("global row index: %d, random chance\n", global_row_ind);
+            } else
                 new_uni[i][j] = cell_next_state(i, j, old_uni, rows, cols);
         }
     }
 
     // Copy new universe state into existing array
-    for (int i = 0; i < rows; i++) {
+    for (int i = start; i < end; i++) {
         for (int j = 0; j < cols; j++) {
             old_uni[i][j] = new_uni[i][j];
         }
@@ -254,30 +292,30 @@ void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks
     MPI_Status status1;
     MPI_Status status2;
 
-    if (rank > 0) {
+    if (rank >= 0) {
         // Recieve row from rank above, store in first "ghost" row
-        MPI_Irecv(tg_row, cols, MPI_UNSIGNED_SHORT, rank - 1, 1, MPI_COMM_WORLD, &tg_req);
+        MPI_Irecv(tg_row, cols, MPI_UNSIGNED_SHORT, mod(rank - 1, num_ranks), 1, MPI_COMM_WORLD, &tg_req);
 
         // Send "first" row to rank above
         bool *f_row = old_uni[1];
         MPI_Request req1;
-        MPI_Isend(f_row, cols, MPI_UNSIGNED_SHORT, rank - 1, 0, MPI_COMM_WORLD, &req1);
+        MPI_Isend(f_row, cols, MPI_UNSIGNED_SHORT, mod(rank - 1, num_ranks), 0, MPI_COMM_WORLD, &req1);
     }
-    if (rank < num_ranks - 1) {
+    if (rank <= num_ranks - 1) {
         // Recieve row from rank below, store in last "ghost" row
-        MPI_Irecv(bg_row, cols, MPI_UNSIGNED_SHORT, rank + 1, 0, MPI_COMM_WORLD, &bg_req);
+        MPI_Irecv(bg_row, cols, MPI_UNSIGNED_SHORT, mod(rank + 1, num_ranks), 0, MPI_COMM_WORLD, &bg_req);
 
         // Send "last" row to rank below
         bool *l_row = old_uni[rows - 2];
         MPI_Request req2;
-        MPI_Isend(l_row, cols, MPI_UNSIGNED_SHORT, rank + 1, 1, MPI_COMM_WORLD, &req2);
+        MPI_Isend(l_row, cols, MPI_UNSIGNED_SHORT, mod(rank + 1, num_ranks), 1, MPI_COMM_WORLD, &req2);
     }
 
-    if (rank > 0) {
+    if (rank >= 0) {
         MPI_Wait(&tg_req, &status1);
         // printf("Rank %d recieved top ghost row\n", rank);
     }
-    if (rank < num_ranks - 1) {
+    if (rank <= num_ranks - 1) {
         MPI_Wait(&bg_req, &status2);
         // printf("Rank %d recieved bottom ghost row\n", rank);
     }
