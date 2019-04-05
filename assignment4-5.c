@@ -77,6 +77,9 @@ void free_bool_arr_2d(bool **uni, int rows);
 void *threadFunction(void *arg);
 int mod(int a, int b);
 
+void print_universe_to_file(const char *filename, bool **uni, int rows, int cols);
+
+
 /***************************************************************************/
 /* Function: Main **********************************************************/
 /***************************************************************************/
@@ -208,6 +211,23 @@ void *threadFunction(void *arg) {
 
 //    free(arg);
     pthread_exit(thread_id);
+}
+
+void print_universe_to_file(const char *filename, bool **uni, int rows, int cols) {
+    FILE *output = fopen(filename, "w");
+    if (output == NULL) {
+        perror("fopen failed:");
+        exit(EXIT_FAILURE);
+    }
+    fprintf(output, "width:%d\n", cols);
+    fprintf(output, "height:%d\n", rows);
+    for (int i = 1; i < rows + 1; i++) {
+        for (int j = 1; j < cols + 1; j++) {
+            fprintf(output, "%d", uni[i][j]);
+        }
+        fprintf(output, "\n");
+    }
+    fclose(output);
 }
 
 void print_some_universe(bool **uni, int rows, int cols) {
