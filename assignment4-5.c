@@ -142,9 +142,6 @@ int main(int argc, char *argv[]) {
     int tid_index = 0;
     int rc;
 
-    bool *arg = malloc(sizeof(bool));
-    *arg = 69;
-
     rows_per_thread = uni_rows / (num_threads * mpi_ranks);
 
     pthread_barrier_init(&presync_barrier, NULL, num_threads);
@@ -181,7 +178,6 @@ int main(int argc, char *argv[]) {
 //            print_universe_to_file("file.txt", universe, 32, 32);
 //            print_some_heatmap(heatmap, rows_per_rank / HEATMAP_WINDOW_SIZE, HEATMAP_SIZE);
         }
-        
 
 //        int a = 4, b;
 //        MPI_File fh;
@@ -193,7 +189,6 @@ int main(int argc, char *argv[]) {
 
     }
 
-
     int *ret_val;
     for (int i = 0; i < tid_index; i++) {
         rc = pthread_join(tid[i], (void **) &ret_val);
@@ -201,7 +196,6 @@ int main(int argc, char *argv[]) {
 //        printf("THREAD %ld: Thread [%ld] joined (returned %d)\n", pthread_self(), tid[i], *ret_val);
     }
     free(ret_val);
-
 
     // Clean up dynamically allocated variables
     free_bool_arr_2d(universe, rows_per_rank + 2);
