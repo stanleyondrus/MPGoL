@@ -1,6 +1,8 @@
 /***************************************************************************/
-/* Template for Asssignment 4/5 ********************************************/
-/* Team Names Here              **(*****************************************/
+/* Asssignment 4/5  ********************************************************/
+/* Judy Fan         ********************************************************/
+/* Stanley Ondrus   ********************************************************/
+/* Sean Rice        ********************************************************/
 /***************************************************************************/
 
 /***************************************************************************/
@@ -34,7 +36,6 @@
 #define ALIVE 1
 #define DEAD  0
 #define NUM_TICKS 256
-#define NUM_THREADS 16
 typedef unsigned short int bool;
 
 /***************************************************************************/
@@ -46,6 +47,7 @@ double g_processor_frequency = 1600000000.0; // processing speed for BG/Q
 unsigned long long g_start_cycles = 0;
 unsigned long long g_end_cycles = 0;
 
+int num_threads = 16;
 int uni_rows = 32768;
 int uni_cols = 32768;
 int gol_ticks = 1;
@@ -90,14 +92,23 @@ int main(int argc, char *argv[]) {
     MPI_Comm_size(MPI_COMM_WORLD, &mpi_ranks);
     MPI_Comm_rank(MPI_COMM_WORLD, &mpi_myrank);
 
+    // Parse command-line args
+    if (argc >= 2) {
+        num_threads = atoi(argv[1]);
+    }
+
+    // Print rank and thread configuration
+    if (mpi_myrank == 0)
+        printf("Ranks: %d\nThreads per Rank: %d\n", mpi_ranks, num_threads);
+
     // Init 32,768 RNG streams - each rank has an independent stream
     InitDefault();
 
     // Note, used the mpi_myrank to select which RNG stream to use.
     // You must replace mpi_myrank with the right row being used.
     // This just show you how to call the RNG.    
-    printf("Rank %d of %d has been started and a first Random Value of %lf\n",
-           mpi_myrank, mpi_ranks, GenVal(mpi_myrank));
+    // printf("Rank %d of %d has been started and a first Random Value of %lf\n",
+    //        mpi_myrank, mpi_ranks, GenVal(mpi_myrank));
 
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -110,7 +121,7 @@ int main(int argc, char *argv[]) {
 
     // TODO: Launch pthreads
 
-    int thread_count = NUM_THREADS - 1;
+    int thread_count = num_threads - 1;
     pthread_t tid[thread_count];
     int tid_index = 0;
     int rc;
@@ -118,9 +129,9 @@ int main(int argc, char *argv[]) {
     bool *arg = malloc(sizeof(bool));
     *arg = 69;
 
-    rows_per_thread = uni_rows / (NUM_THREADS * mpi_ranks);
+    rows_per_thread = uni_rows / (num_threads * mpi_ranks);
 
-    pthread_barrier_init(&presync_barrier, NULL, NUM_THREADS);
+    pthread_barrier_init(&presync_barrier, NULL, num_threads);
 
     for (int i = 0; i < thread_count; i++) {
         int *thread_id = malloc(sizeof(int));
@@ -259,8 +270,8 @@ void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thr
 
     // Row bounds for a thread to update
     int start = thread_id * (rows_per_thread) + 1;
-    int end = (start + ((rows - 2) / NUM_THREADS));
-    if (thread_id == NUM_THREADS - 1) {
+    int end = (start + ((rows - 2) / num_threads));
+    if (thread_id == num_threads - 1) {
         end = rows - 1;
     }
 
