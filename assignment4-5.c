@@ -35,6 +35,8 @@
 #define DEAD  0
 #define NUM_TICKS 256
 #define NUM_THREADS 16
+#define HEATMAP_SIZE 1024
+#define HEATMAP_WINDOW_SIZE 32
 typedef unsigned short int bool;
 
 /***************************************************************************/
@@ -57,6 +59,7 @@ int rows_per_rank; // TODO: probably take this one out
 int rows_per_thread;
 
 bool **universe;
+int **heatmap;
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_barrier_t presync_barrier, barrier;
@@ -66,6 +69,8 @@ pthread_barrier_t presync_barrier, barrier;
 /***************************************************************************/
 
 bool **alloc_bool_arr_2d(int rows, int cols);
+
+int **alloc_int_arr_2d(int rows, int cols);
 
 void init_universe(bool **uni, int rows, int cols);
 
@@ -81,6 +86,8 @@ int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols);
 
 void print_some_universe(bool **uni, int rows, int cols);
 
+void print_some_heatmap(int **uni, int rows, int cols);
+
 void free_bool_arr_2d(bool **uni, int rows);
 
 void *threadFunction(void *arg);
@@ -88,6 +95,10 @@ void *threadFunction(void *arg);
 int mod(int a, int b);
 
 void print_universe_to_file(const char *filename, bool **uni, int rows, int cols);
+
+int sum_matrix(bool **uni, int x_start, int x_stop, int y_start, int y_stop);
+
+void calculate_heatmap();
 
 
 /***************************************************************************/
@@ -116,6 +127,8 @@ int main(int argc, char *argv[]) {
 
     // Initialize universe to all cells alive
     universe = alloc_bool_arr_2d(rows_per_rank + 2, uni_cols);
+    heatmap = alloc_int_arr_2d(rows_per_rank / HEATMAP_WINDOW_SIZE, HEATMAP_SIZE);
+
     init_universe(universe, rows_per_rank + 2, uni_cols);
 
     // TODO: Launch pthreads
@@ -155,12 +168,16 @@ int main(int argc, char *argv[]) {
 //            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.0f);
         }
         pthread_barrier_wait(&presync_barrier);
-        if (mpi_myrank == 0 && t % 1 == 0) {
+
+        calculate_heatmap();
+
+        if (mpi_myrank == 0 && t % 10 == 0) {
             printf("Tick: %d\n", t);
 //            print_some_universe(universe, rows_per_rank + 2, uni_cols);
+//            print_universe_to_file("file.txt", universe, 32, 32);
+//            print_some_heatmap(heatmap, rows_per_rank / HEATMAP_WINDOW_SIZE, HEATMAP_SIZE);
         }
-        // TODO: Write current state to file
-
+        
 
 //        int a = 4, b;
 //        MPI_File fh;
@@ -200,6 +217,28 @@ int mod(int a, int b) {
     return r < 0 ? r + b : r;
 }
 
+void calculate_heatmap() {
+    for (int i = 0; i < rows_per_rank / HEATMAP_WINDOW_SIZE; i++) {
+        for (int j = 0; j < uni_cols / HEATMAP_WINDOW_SIZE; j++) {
+            int start_x = HEATMAP_WINDOW_SIZE * i;
+            int start_y = HEATMAP_WINDOW_SIZE * j;
+            int stop_x = start_x + HEATMAP_WINDOW_SIZE;
+            int stop_y = start_y + HEATMAP_WINDOW_SIZE;
+            heatmap[i][j] += sum_matrix(universe, start_x, stop_x, start_y, stop_y);
+        }
+    }
+}
+
+int sum_matrix(bool **uni, int x_start, int x_stop, int y_start, int y_stop) {
+    int ret_val = 0;
+    for (int i = x_start; i < x_stop; ++i) {
+        for (int j = y_start; j < y_stop; ++j) {
+            ret_val += uni[i][j];
+        }
+    }
+    return ret_val;
+}
+
 void *threadFunction(void *arg) {
     int *thread_id = (int *) arg;
 
@@ -212,7 +251,8 @@ void *threadFunction(void *arg) {
     for (int t = 0; t < NUM_TICKS; t++) {
         pthread_barrier_wait(&presync_barrier);
 //        printf("RANK %d THREAD %ld THREAD_ID %d iteration: %d\n", mpi_myrank, pthread_self(), *thread_id, t);
-        update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, *thread_id, (t == 0) ? 0.70f : 0.0f);
+        update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, *thread_id,
+                              (t == 0) ? 0.70f : 0.0f);
         pthread_barrier_wait(&presync_barrier);
     }
 
@@ -226,10 +266,10 @@ void print_universe_to_file(const char *filename, bool **uni, int rows, int cols
         perror("fopen failed:");
         exit(EXIT_FAILURE);
     }
-    fprintf(output, "width:%d\n", cols);
-    fprintf(output, "height:%d\n", rows);
-    for (int i = 1; i < rows + 1; i++) {
-        for (int j = 1; j < cols + 1; j++) {
+//    fprintf(output, "width:%d\n", cols);
+//    fprintf(output, "height:%d\n", rows);
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
             fprintf(output, "%d", uni[i][j]);
         }
         fprintf(output, "\n");
@@ -238,14 +278,23 @@ void print_universe_to_file(const char *filename, bool **uni, int rows, int cols
 }
 
 void print_some_universe(bool **uni, int rows, int cols) {
-//    for (int i = 15; i < 25+15; i++) {
-//        for (int j = 0; j < 50; j++) {
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
-            if (uni[i][j] == ALIVE)
+            if (uni[i][j] == ALIVE) {
                 printf("*");
-            else
+            } else {
                 printf(" ");
+            }
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+void print_some_heatmap(int **uni, int rows, int cols) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            printf(" %d ", uni[i][j]);
         }
         printf("\n");
     }
@@ -388,6 +437,14 @@ bool **alloc_bool_arr_2d(int rows, int cols) {
     bool **uni = (bool **) calloc(rows, sizeof(bool *));
     for (int i = 0; i < rows; i++) {
         uni[i] = (bool *) calloc(cols, sizeof(bool));
+    }
+    return uni;
+}
+
+int **alloc_int_arr_2d(int rows, int cols) {
+    int **uni = (int **) calloc(rows, sizeof(int *));
+    for (int i = 0; i < rows; i++) {
+        uni[i] = (int *) calloc(cols, sizeof(int));
     }
     return uni;
 }
