@@ -66,25 +66,15 @@ pthread_barrier_t presync_barrier, barrier;
 /***************************************************************************/
 
 bool **alloc_bool_arr_2d(int rows, int cols);
-
 void init_universe(bool **uni, int rows, int cols);
-
 void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks);
-
 void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thread_id, double thresh);
-
 bool life_lotto(Gen seed);
-
 bool cell_next_state(int i, int j, bool **uni, int rows, int cols);
-
 int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols);
-
 void print_some_universe(bool **uni, int rows, int cols);
-
 void free_bool_arr_2d(bool **uni, int rows);
-
 void *threadFunction(void *arg);
-
 int mod(int a, int b);
 
 /***************************************************************************/
@@ -189,9 +179,10 @@ int main(int argc, char *argv[]) {
 }
 
 /***************************************************************************/
-/* Other Functions - You write as part of the assignment********************/
+/* Function Implementations ************************************************/
 /***************************************************************************/
 
+// We can get the correct modulus for negative values using this function
 int mod(int a, int b) {
     int r = a % b;
     return r < 0 ? r + b : r;
@@ -207,9 +198,11 @@ void *threadFunction(void *arg) {
 
 
     for (int t = 0; t < NUM_TICKS; t++) {
+        // Wait for the MPI_ranks to sync
         pthread_barrier_wait(&presync_barrier);
 //        printf("RANK %d THREAD %ld THREAD_ID %d iteration: %d\n", mpi_myrank, pthread_self(), *thread_id, t);
         update_universe_state(universe, rows_per_rank + 2, uni_cols, mpi_myrank, *thread_id, (t == 0) ? 0.70f : 0.0f);
+        // Wait for all threads to finish syncing before printing
         pthread_barrier_wait(&presync_barrier);
     }
 
@@ -241,20 +234,20 @@ void print_some_universe(bool **uni, int rows, int cols) {
 void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thread_id, double thresh) {
 //    printf("UPDATING UNIVERSE AT RANK %d THREAD_ID %d THRESH %f\n", rank, thread_id, thresh);
 
+    // Allocate a new universe to temporarily store next universe state
     bool **new_uni = alloc_bool_arr_2d(rows, cols);
 
+    // Row bounds for a thread to update
     int start = thread_id * (rows_per_thread) + 1;
     int end = (start + ((rows - 2) / NUM_THREADS));
     if (thread_id == NUM_THREADS - 1) {
         end = rows - 1;
     }
 
+    // Update all cells in rows
 //    printf("For loop i=%d; i<%d\n", start, end);
     for (int i = start; i < end; i++) {
         int global_row_ind = i + (rank * (rows - 2));
-//        int global_row_ind = i + ((rank + thread_id) * (rows - 2));
-//        int global_row_ind = i + (((rank*NUM_THREADS) + thread_id) * (rows - 2));
-//        int global_row_ind = i + (((rank*NUM_THREADS) + thread_id) * (rows - 2));
 //        printf("rank %d, rows %d, thread_id %d, global row_ind = %d \n", rank, rows, thread_id, global_row_ind);
 //        printf("thread: %d, rows: %d, i: %d, global_row_ind: %d\n", thread_id, rows, i, global_row_ind);
         for (int j = 0; j < cols; j++) {
@@ -277,6 +270,7 @@ void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thr
     free_bool_arr_2d(new_uni, rows);
 }
 
+// Coin flip: return ALIVE/DEAD with 50% chance each
 bool life_lotto(Gen seed) {
     double chance = GenVal(seed);
     if (chance > 0.5f)
@@ -292,45 +286,38 @@ void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks
     MPI_Status status1;
     MPI_Status status2;
 
-    if (rank >= 0) {
-        // Recieve row from rank above, store in first "ghost" row
-        MPI_Irecv(tg_row, cols, MPI_UNSIGNED_SHORT, mod(rank - 1, num_ranks), 1, MPI_COMM_WORLD, &tg_req);
+    // Recieve row from rank above, store in first "ghost" row
+    MPI_Irecv(tg_row, cols, MPI_UNSIGNED_SHORT, mod(rank - 1, num_ranks), 1, MPI_COMM_WORLD, &tg_req);
+    // Recieve row from rank below, store in last "ghost" row
+    MPI_Irecv(bg_row, cols, MPI_UNSIGNED_SHORT, mod(rank + 1, num_ranks), 0, MPI_COMM_WORLD, &bg_req);
 
-        // Send "first" row to rank above
-        bool *f_row = old_uni[1];
-        MPI_Request req1;
-        MPI_Isend(f_row, cols, MPI_UNSIGNED_SHORT, mod(rank - 1, num_ranks), 0, MPI_COMM_WORLD, &req1);
-    }
-    if (rank <= num_ranks - 1) {
-        // Recieve row from rank below, store in last "ghost" row
-        MPI_Irecv(bg_row, cols, MPI_UNSIGNED_SHORT, mod(rank + 1, num_ranks), 0, MPI_COMM_WORLD, &bg_req);
+    // Send "first" row to rank above
+    bool *f_row = old_uni[1];
+    MPI_Request req1;
+    MPI_Isend(f_row, cols, MPI_UNSIGNED_SHORT, mod(rank - 1, num_ranks), 0, MPI_COMM_WORLD, &req1);
 
-        // Send "last" row to rank below
-        bool *l_row = old_uni[rows - 2];
-        MPI_Request req2;
-        MPI_Isend(l_row, cols, MPI_UNSIGNED_SHORT, mod(rank + 1, num_ranks), 1, MPI_COMM_WORLD, &req2);
-    }
+    // Send "last" row to rank below
+    bool *l_row = old_uni[rows - 2];
+    MPI_Request req2;
+    MPI_Isend(l_row, cols, MPI_UNSIGNED_SHORT, mod(rank + 1, num_ranks), 1, MPI_COMM_WORLD, &req2);
+    
 
-    if (rank >= 0) {
-        MPI_Wait(&tg_req, &status1);
-        // printf("Rank %d recieved top ghost row\n", rank);
-    }
-    if (rank <= num_ranks - 1) {
-        MPI_Wait(&bg_req, &status2);
-        // printf("Rank %d recieved bottom ghost row\n", rank);
-    }
+    MPI_Wait(&tg_req, &status1);
+    // printf("Rank %d recieved top ghost row\n", rank);
+    MPI_Wait(&bg_req, &status2);
+    // printf("Rank %d recieved bottom ghost row\n", rank);
 }
 
 int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols) {
     int count = 0;
+    // Check all eight neighbors of input cell
     for (int i = i_in - 1; i < i_in + 2; i++) {
         for (int j = j_in - 1; j < j_in + 2; j++) {
-            if (i > 0
-                && j > 0
-                && i < rows
-                && j < cols
-                && !(j == j_in && i == i_in)
-                && uni[i][j] == ALIVE) {
+            // Verify index is:
+            //  - inside of array
+            //  - index is not "center"
+            if (i > 0 && j > 0 && i < rows && j < cols && 
+                !(j == j_in && i == i_in) && uni[i][j] == ALIVE) {
                 count++;
             }
         }
