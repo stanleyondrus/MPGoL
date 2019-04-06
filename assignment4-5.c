@@ -35,7 +35,7 @@
 
 #define ALIVE 1
 #define DEAD  0
-#define NUM_TICKS 256
+#define NUM_TICKS 2
 typedef unsigned short int bool;
 
 /***************************************************************************/
@@ -48,8 +48,8 @@ unsigned long long g_start_cycles = 0;
 unsigned long long g_end_cycles = 0;
 
 int num_threads = 16;
-int uni_rows = 32768;
-int uni_cols = 32768;
+int uni_rows = 1024;
+int uni_cols = 1024;
 int gol_ticks = 1;
 
 int mpi_myrank;
@@ -78,9 +78,7 @@ void print_some_universe(bool **uni, int rows, int cols);
 void free_bool_arr_2d(bool **uni, int rows);
 void *threadFunction(void *arg);
 int mod(int a, int b);
-
-void print_universe_to_file(const char *filename, bool **uni, int rows, int cols);
-
+void write_universe_to_file(const char *filename, bool **uni, int rows, int cols, int rank);
 
 /***************************************************************************/
 /* Function: Main **********************************************************/
@@ -156,20 +154,12 @@ int main(int argc, char *argv[]) {
 //            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.0f);
         }
         pthread_barrier_wait(&presync_barrier);
+        write_universe_to_file("/home/parallel/spring-2019/rices/hw4/uni_out.txt", universe, rows_per_rank + 2, uni_cols, mpi_myrank);
         if (mpi_myrank == 0 && t % 1 == 0) {
             printf("Tick: %d\n", t);
 //            print_some_universe(universe, rows_per_rank + 2, uni_cols);
         }
         // TODO: Write current state to file
-
-
-//        int a = 4, b;
-//        MPI_File fh;
-//        MPI_File_open( MPI_COMM_WORLD, "myfile", MPI_MODE_RDWR, MPI_INFO_NULL, &fh ) ;
-//        MPI_File_set_view( fh, 0, MPI_INT, MPI_INT, "native", MPI_INFO_NULL ) ;
-//        MPI_File_write_at(fh, 10, &a, 1, MPI_INT, &status ) ;
-//        MPI_File_read_at(fh,  10, &b, 1, MPI_INT, &status ) ;
-//        MPI_File_close( &cFile );
 
     }
 
@@ -224,21 +214,72 @@ void *threadFunction(void *arg) {
     pthread_exit(thread_id);
 }
 
-void print_universe_to_file(const char *filename, bool **uni, int rows, int cols) {
-    FILE *output = fopen(filename, "w");
-    if (output == NULL) {
-        perror("fopen failed:");
-        exit(EXIT_FAILURE);
-    }
-    fprintf(output, "width:%d\n", cols);
-    fprintf(output, "height:%d\n", rows);
-    for (int i = 1; i < rows + 1; i++) {
-        for (int j = 1; j < cols + 1; j++) {
-            fprintf(output, "%d", uni[i][j]);
+void strreverse(char* begin, char* end) {
+	
+	char aux;
+	
+	while(end>begin)
+	
+		aux=*end, *end--=*begin, *begin++=aux;
+	
+}
+
+void itoa(int value, char* str, int base) {
+	
+	static char num[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+	
+	char* wstr=str;
+	
+	int sign;
+	
+	// Validate base	
+	if (base<2 || base>35){ *wstr='\0'; return; }
+	
+	// Take care of sign
+	if ((sign=value) < 0) value = -value;
+
+	// Conversion. Number is reversed.
+	do *wstr++ = num[value%base]; while(value/=base);
+	if(sign<0) *wstr++='-';
+	*wstr='\0';
+	
+	// Reverse string
+	strreverse(str,wstr-1);
+}
+
+void write_universe_to_file(const char *filename, bool **uni, int rows, int cols, int rank) {
+    MPI_Status status;
+    MPI_File fh;
+    MPI_File_open( MPI_COMM_WORLD, filename, MPI_MODE_RDWR | MPI_MODE_CREATE, MPI_INFO_NULL, &fh ) ;
+
+    for (int i = 1; i < rows - 1; i++) {
+        int global_row_ind = i + (rank * (rows - 2));
+        for (int j = 0; j < cols; j++) {
+            int offset = (global_row_ind * cols) + j;
+            char c[10];
+            itoa((int)uni[i][j], c, 10);
+            MPI_File_write_at(fh, offset, c, strlen(c), MPI_CHAR, &status ) ;
         }
-        fprintf(output, "\n");
     }
-    fclose(output);
+
+    MPI_File_close( &fh );
+    // // MPI_File_set_view( fh, 0, MPI_INT, MPI_INT, "native", MPI_INFO_NULL ) ;
+    // // MPI_File_read_at(fh,  10, &b, 1, MPI_INT, &status ) ;
+
+    // FILE *output = fopen(filename, "w");
+    // if (output == NULL) {
+    //     perror("fopen failed:");
+    //     exit(EXIT_FAILURE);
+    // }
+    // fprintf(output, "width:%d\n", cols);
+    // fprintf(output, "height:%d\n", rows);
+    // for (int i = 1; i < rows + 1; i++) {
+    //     for (int j = 1; j < cols + 1; j++) {
+    //         fprintf(output, "%d", uni[i][j]);
+    //     }
+    //     fprintf(output, "\n");
+    // }
+    // fclose(output);
 }
 
 void print_some_universe(bool **uni, int rows, int cols) {

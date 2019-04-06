@@ -27,7 +27,7 @@ then
 
     # Run
     echo "Run"
-    ssh $USERNAME@$SSH_ADDR "/usr/local/mpich-3.2/bin/mpirun -np 32 hw4/assignment4-5 32"
+    ssh $USERNAME@$SSH_ADDR "/usr/local/mpich-3.2/bin/mpirun -np 1 hw4/assignment4-5 1"
     echo
 
     # Sync files
