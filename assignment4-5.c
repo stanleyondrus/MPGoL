@@ -198,7 +198,10 @@ int main(int argc, char *argv[]) {
 
 
         pthread_barrier_wait(&presync_barrier);
-        // calculate_heatmap();
+        if (write_heatmap == true) {
+            calculate_heatmap();
+        }
+
 
         if (mpi_myrank == 0) {
             printf("Tick: %d\n", t);
