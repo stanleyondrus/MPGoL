@@ -57,6 +57,7 @@ int uni_rows = 4096;
 int uni_cols = 4096;
 int heatmap_rows = 0;
 int heatmap_cols = 0;
+float threshold = 0.50f;
 int gol_ticks = 1;
 bool write_heatmap = false;
 bool write_universe = false;
@@ -71,7 +72,7 @@ int heatmap_col_inc;
 int rows_per_thread;
 
 bool **universe;
-bool ** new_uni;
+bool **new_uni;
 int **heatmap;
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -84,6 +85,7 @@ struct prog_params {
     int heatmap_cols;
     int ticks;
     int threads;
+    float threshold;
     bool write_universe;
     bool write_heatmap;
 };
@@ -112,7 +114,6 @@ void write_heatmap_to_file(char *filename, int **uni, int rows, int cols, int ra
 int sum_matrix(bool **uni, int x_start, int x_stop, int y_start, int y_stop);
 void calculate_heatmap();
 
-
 /***************************************************************************/
 /* Function: Main **********************************************************/
 /***************************************************************************/
@@ -131,6 +132,7 @@ int main(int argc, char *argv[]) {
     heatmap_rows = params.heatmap_rows;
     heatmap_cols = params.heatmap_cols;
     gol_ticks = params.ticks;
+    threshold = params.threshold;
     write_heatmap = params.write_heatmap;
     write_universe = params.write_universe;
 
@@ -138,7 +140,7 @@ int main(int argc, char *argv[]) {
     if (mpi_myrank == 0) {
         printf("Ranks: %d\n", mpi_ranks);
         print_params(params);
-    }    
+    }
 
     // Init 32,768 RNG streams - each rank has an independent stream
     InitDefault();
@@ -190,14 +192,11 @@ int main(int argc, char *argv[]) {
         // printf("post barrier");
 //        pthread_barrier_init(&barrier, NULL, thread_count + 1);
 //        pthread_barrier_wait(&barrier);
-        if (t == 0) {
-            // ranks are considered thread 0
-            update_universe_state(universe, uni_rows_per_rank + 2, uni_cols, mpi_myrank, 0, 0.70f);
-//            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.70f);
-        } else {
-            update_universe_state(universe, uni_rows_per_rank + 2, uni_cols, mpi_myrank, 0, 0.0f);
-//            update_universe_state(universe, rows_per_thread + 2, uni_cols, mpi_myrank, 0, 0.0f);
-        }
+
+        // ranks are considered thread 0
+        update_universe_state(universe, uni_rows_per_rank + 2, uni_cols, mpi_myrank, 0, (t == 0) ? threshold : 0.0f);
+
+
         pthread_barrier_wait(&presync_barrier);
         // calculate_heatmap();
 
@@ -211,7 +210,7 @@ int main(int argc, char *argv[]) {
 
     g_end_cycles = GetTimeBase();
     if (mpi_myrank == 0) {
-        g_time_in_secs = ((double)(g_end_cycles - g_start_cycles)) / g_processor_frequency;
+        g_time_in_secs = ((double) (g_end_cycles - g_start_cycles)) / g_processor_frequency;
         printf("Main execution time: %lf", g_time_in_secs);
     }
 
@@ -256,32 +255,36 @@ struct prog_params parse_args(int argc, char **argv) {
     params.heatmap_cols = 1024;
     params.heatmap_rows = 1024;
     params.ticks = 256;
+    params.threshold = 0.50f;
     params.write_heatmap = false;
     params.write_universe = false;
 
     if (argc > 1) {
         for (int i = 1; i < argc; i++) {
-            if (strcmp("--threads", argv[i]) == 0){
-                params.threads = atoi(argv[i+1]);
+            if (strcmp("--threads", argv[i]) == 0) {
+                params.threads = atoi(argv[i + 1]);
             }
-            if (strcmp("--ticks", argv[i]) == 0){
-                params.ticks = atoi(argv[i+1]);
+            if (strcmp("--ticks", argv[i]) == 0) {
+                params.ticks = atoi(argv[i + 1]);
             }
-            if (strcmp("--uni-size", argv[i]) == 0){
-                params.uni_rows = atoi(argv[i+1]);
-                params.uni_cols = atoi(argv[i+2]);
+            if (strcmp("--uni-size", argv[i]) == 0) {
+                params.uni_rows = atoi(argv[i + 1]);
+                params.uni_cols = atoi(argv[i + 2]);
             }
-            if (strcmp("--heatmap-size", argv[i]) == 0){
-                params.heatmap_rows = atoi(argv[i+1]);
-                params.heatmap_cols = atoi(argv[i+2]);
+            if (strcmp("--heatmap-size", argv[i]) == 0) {
+                params.heatmap_rows = atoi(argv[i + 1]);
+                params.heatmap_cols = atoi(argv[i + 2]);
             }
-            if (strcmp("--write-uni", argv[i]) == 0){
+            if (strcmp("--write-uni", argv[i]) == 0) {
                 params.write_universe = true;
             }
-            if (strcmp("--write-heatmap", argv[i]) == 0){
+            if (strcmp("--write-heatmap", argv[i]) == 0) {
                 params.write_heatmap = true;
             }
-        }   
+            if (strcmp("--threshold", argv[i]) == 0) {
+                params.threshold = atof(argv[i + 1]);
+            }
+        }
     }
 
     return params;
@@ -292,6 +295,7 @@ void print_params(struct prog_params params) {
     printf("Universe Size: %d by %d\n", params.uni_rows, params.uni_cols);
     printf("Heatmap Size: %d by %d\n", params.heatmap_rows, params.heatmap_cols);
     printf("Ticks: %d\n", params.ticks);
+    printf("Threshold: %f\n", params.threshold);
 }
 
 // We can get the correct modulus for negative values using this function
@@ -335,7 +339,7 @@ void *threadFunction(void *arg) {
         // Wait for the MPI_ranks to sync
         pthread_barrier_wait(&presync_barrier);
         // printf("RANK %d THREAD %ld THREAD_ID %d iteration: %d\n", mpi_myrank, pthread_self(), *thread_id, t);
-        update_universe_state(universe, uni_rows_per_rank + 2, uni_cols, mpi_myrank, *thread_id, (t == 0) ? 0.70f : 0.0f);
+        update_universe_state(universe, uni_rows_per_rank + 2, uni_cols, mpi_myrank, *thread_id, (t == 0) ? threshold : 0.0f);
         // Wait for all threads to finish syncing before printing
         pthread_barrier_wait(&presync_barrier);
     }
@@ -344,67 +348,64 @@ void *threadFunction(void *arg) {
     pthread_exit(thread_id);
 }
 
-void strreverse(char* begin, char* end) {
-	
-	char aux;
-	
-	while(end>begin) {
-		aux=*end, *end--=*begin, *begin++=aux;
+void strreverse(char *begin, char *end) {
+    char aux;
+    while (end > begin) {
+        aux = *end, *end-- = *begin, *begin++ = aux;
     }
-	
 }
 
-void itoa(int value, char* str, int base) {
-	
-	static char num[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-	
-	char* wstr=str;
-	
-	int sign;
-	
-	// Validate base	
-	if (base<2 || base>35){ *wstr='\0'; return; }
-	
-	// Take care of sign
-	if ((sign=value) < 0) value = -value;
+void itoa(int value, char *str, int base) {
+    static char num[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    char *wstr = str;
+    int sign;
 
-	// Conversion. Number is reversed.
-	do *wstr++ = num[value%base]; while(value/=base);
-	if(sign<0) *wstr++='-';
-	*wstr='\0';
-	
-	// Reverse string
-	strreverse(str,wstr-1);
+    // Validate base
+    if (base < 2 || base > 35) {
+        *wstr = '\0';
+        return;
+    }
+
+    // Take care of sign
+    if ((sign = value) < 0) value = -value;
+
+    // Conversion. Number is reversed.
+    do *wstr++ = num[value % base]; while (value /= base);
+    if (sign < 0) *wstr++ = '-';
+    *wstr = '\0';
+
+    // Reverse string
+    strreverse(str, wstr - 1);
 }
 
 void write_universe_to_file(char *filename, bool **uni, int rows, int cols, int rank) {
     MPI_Status status;
     MPI_File fh;
-    MPI_File_open( MPI_COMM_WORLD, filename, MPI_MODE_RDWR | MPI_MODE_CREATE, MPI_INFO_NULL, &fh ) ;
+    MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDWR | MPI_MODE_CREATE, MPI_INFO_NULL, &fh);
 
     for (int i = 1; i < rows - 1; i++) {
         int global_row_ind = i + (rank * (rows));
         int offset = (global_row_ind * cols * 2);
         // printf("Rank %d writing row %d with offset %d.\n", rank, i, offset);
-        MPI_File_write_at(fh, offset, uni[i], cols, MPI_UNSIGNED_SHORT, &status );
+        MPI_File_write_at(fh, offset, uni[i], cols, MPI_UNSIGNED_SHORT, &status);
     }
 
-    MPI_File_close( &fh );
+    MPI_File_close(&fh);
 }
 
 void write_heatmap_to_file(char *filename, int **uni, int rows, int cols, int rank) {
     MPI_Status status;
     MPI_File fh;
-    MPI_File_open( MPI_COMM_WORLD, filename, MPI_MODE_RDWR | MPI_MODE_CREATE, MPI_INFO_NULL, &fh ) ;
+    MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDWR | MPI_MODE_CREATE, MPI_INFO_NULL, &fh);
 
     for (int i = 0; i < rows; i++) {
         int global_row_ind = i + (rank * (rows));
         int offset = (global_row_ind * cols * 4);
         // printf("Rank %d writing row %d with offset %d.\n", rank, i, offset);
-        MPI_File_write_at(fh, offset, uni[i], cols, MPI_INT, &status );
+        MPI_File_write_at(fh, offset, uni[i], cols, MPI_INT, &status);
     }
 
-    MPI_File_close( &fh );
+    MPI_File_close(&fh);
 }
 
 void print_some_universe(bool **uni, int rows, int cols) {
@@ -448,7 +449,7 @@ void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thr
         end = rows - 1;
     }
     // printf("start: %d, end: %d, rows: %d\n", start, end, rows);
-    
+
     // Update all cells in rows
 //    printf("For loop i=%d; i<%d\n", start, end);
     for (int i = start; i < end && i < rows; i++) {
@@ -503,7 +504,7 @@ void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks
     bool *l_row = old_uni[rows - 2];
     MPI_Request req2;
     MPI_Isend(l_row, cols, MPI_UNSIGNED_SHORT, mod(rank + 1, num_ranks), 1, MPI_COMM_WORLD, &req2);
-    
+
 
     MPI_Wait(&tg_req, &status1);
     // printf("Rank %d recieved top ghost row\n", rank);
@@ -519,7 +520,7 @@ int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols) {
             // Verify index is:
             //  - inside of array
             //  - index is not "center"
-            if (i > 0 && j > 0 && i < rows && j < cols && 
+            if (i > 0 && j > 0 && i < rows && j < cols &&
                 !(j == j_in && i == i_in) && uni[i][j] == ALIVE) {
                 count++;
             }
