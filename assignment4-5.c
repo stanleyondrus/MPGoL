@@ -214,7 +214,7 @@ int main(int argc, char *argv[]) {
     g_end_cycles = GetTimeBase();
     if (mpi_myrank == 0) {
         g_time_in_secs = ((double) (g_end_cycles - g_start_cycles)) / g_processor_frequency;
-        printf("Main execution time: %lf", g_time_in_secs);
+        printf("Main execution time: %lf\n", g_time_in_secs);
     }
 
     for (int i = 0; i < num_threads - 1; i++) {
@@ -228,14 +228,22 @@ int main(int argc, char *argv[]) {
     MPI_Barrier(MPI_COMM_WORLD);
 
     if (write_heatmap == true) {
-        if (mpi_myrank == 0)
+        if (mpi_myrank == 0) {
             printf("Writing heatmap to file.\n");
+        }
         write_heatmap_to_file("heatmap_out.ibin", heatmap, heatmap_rows_per_rank, heatmap_cols, mpi_myrank);
     }
     if (write_universe == true) {
-        if (mpi_myrank == 0)
+        if (mpi_myrank == 0) {
             printf("Writing universe to file.\n");
+        }
+        g_start_cycles = GetTimeBase();
         write_universe_to_file("uni_out.usbin", universe, uni_rows_per_rank + 2, uni_cols, mpi_myrank);
+        g_end_cycles = GetTimeBase();
+        if (mpi_myrank == 0) {
+            g_time_in_secs = ((double) (g_end_cycles - g_start_cycles)) / g_processor_frequency;
+            printf("Parallel I/O execution time: %lf\n", g_time_in_secs);
+        }
     }
     // Clean up dynamically allocated variables
     free_bool_arr_2d(universe, uni_rows_per_rank + 2);
@@ -461,7 +469,7 @@ void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thr
 //        printf("thread: %d, rows: %d, i: %d, global_row_ind: %d\n", thread_id, rows, i, global_row_ind);
         for (int j = 0; j < cols; j++) {
             double random_chance = GenVal(global_row_ind);
-            if (random_chance < thresh) {
+            if (random_chance <= thresh) {
                 new_uni[i][j] = life_lotto(global_row_ind);
 //                printf("global row index: %d, random chance\n", global_row_ind);
             } else
@@ -541,11 +549,13 @@ bool cell_next_state(int i, int j, bool **uni, int rows, int cols) {
     int neighbors = neighbor_count(i, j, uni, rows, cols);
     int is_alive = uni[i][j];
     if (is_alive == ALIVE) {
-        if (neighbors < 2 || neighbors > 3)
+        if (neighbors < 2 || neighbors > 3) {
             return DEAD;
+        }
     } else {
-        if (neighbors == 3)
+        if (neighbors == 3) {
             return ALIVE;
+        }
     }
     return is_alive;
 }
