@@ -3,6 +3,16 @@
 /* Judy Fan         ********************************************************/
 /* Stanley Ondrus   ********************************************************/
 /* Sean Rice        ********************************************************/
+
+// Compile with:
+// BGQ: make b
+// Mastiff: make
+
+// Run with:
+// sbatch --partition debug --nodes 4 --time 60 ./run_n4.sh
+// sbatch --partition debug --nodes 16 --time 60 ./run_n16.sh
+// sbatch --partition small --nodes 64 --time 60 ./run_n64.sh
+// sbatch --partition medium --nodes 128 --time 60 ./run_n128.sh
 /***************************************************************************/
 
 /***************************************************************************/
@@ -37,7 +47,7 @@
 #define DEAD  0
 #define true 1
 #define false 0
-#define NUM_TICKS 256
+#define NUM_TICKS 128
 #define NUM_THREADS 16
 #define HEATMAP_SIZE 1024
 #define HEATMAP_WINDOW_SIZE 32
