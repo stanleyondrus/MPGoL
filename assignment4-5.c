@@ -6,7 +6,7 @@
 
 // Compile with:
 // BGQ: make b
-// Mastiff: make
+// Mastiff: make all
 
 // Run with:
 // sbatch --partition debug --nodes 4 --time 60 ./run_n4.sh
@@ -31,7 +31,7 @@
 #include<mpi.h>
 #include<pthread.h>
 
-#define BGQ 1 // when running BG/Q, comment out when testing on mastiff
+// #define BGQ 1 // when running BG/Q, comment out when testing on mastiff
 
 #ifdef BGQ
 #include<hwi/include/bqc/A2_inlines.h>
@@ -47,10 +47,6 @@
 #define DEAD  0
 #define true 1
 #define false 0
-#define NUM_TICKS 128
-#define NUM_THREADS 16
-#define HEATMAP_SIZE 1024
-#define HEATMAP_WINDOW_SIZE 32
 typedef unsigned short int bool;
 
 /***************************************************************************/
@@ -75,7 +71,7 @@ bool write_universe = false;
 int mpi_myrank;
 int mpi_ranks;
 
-int uni_rows_per_rank; // TODO: probably take this one out
+int uni_rows_per_rank;
 int heatmap_rows_per_rank;
 int heatmap_row_inc;
 int heatmap_col_inc;
@@ -104,25 +100,39 @@ struct prog_params {
 /* Function Decs ***********************************************************/
 /***************************************************************************/
 
+// Parameter parsing
 void print_params(struct prog_params params);
 struct prog_params parse_args(int argc, char **argv);
-bool **alloc_bool_arr_2d(int rows, int cols);
-int **alloc_int_arr_2d(int rows, int cols);
+
+// Universe ops
 void init_universe(bool **uni, int rows, int cols);
 void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks);
 void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thread_id, double thresh);
-bool life_lotto(Gen seed);
 bool cell_next_state(int i, int j, bool **uni, int rows, int cols);
+bool life_lotto(Gen seed);
 int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols);
 void print_some_universe(bool **uni, int rows, int cols);
-void print_some_heatmap(int **uni, int rows, int cols);
-void free_bool_arr_2d(bool **uni, int rows);
-void *threadFunction(void *arg);
-int mod(int a, int b);
 void write_universe_to_file(char *filename, bool **uni, int rows, int cols, int rank);
+
+// Heatmaps ops
+void calculate_heatmap();
+void print_some_heatmap(int **uni, int rows, int cols);
 void write_heatmap_to_file(char *filename, int **uni, int rows, int cols, int rank);
 int sum_matrix(bool **uni, int x_start, int x_stop, int y_start, int y_stop);
-void calculate_heatmap();
+
+// Alloc/free 2d array funcs
+bool **alloc_bool_arr_2d(int rows, int cols);
+int **alloc_int_arr_2d(int rows, int cols);
+void free_bool_arr_2d(bool **uni, int rows);
+void free_int_arr_2d(int **uni, int rows);
+
+// Pthread funcs
+void *threadFunction(void *arg);
+
+// Helper funcs
+int mod(int a, int b);
+void strreverse(char *begin, char *end);
+void itoa(int value, char *str, int base);
 
 /***************************************************************************/
 /* Function: Main **********************************************************/
@@ -157,7 +167,7 @@ int main(int argc, char *argv[]) {
 
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // Set variables
+    // Initialize global variables
     uni_rows_per_rank = uni_rows / mpi_ranks;
     heatmap_rows_per_rank = heatmap_rows / mpi_ranks;
     heatmap_col_inc = uni_cols / heatmap_cols;
@@ -167,12 +177,8 @@ int main(int argc, char *argv[]) {
     universe = alloc_bool_arr_2d(uni_rows_per_rank + 2, uni_cols);
     new_uni = alloc_bool_arr_2d(uni_rows_per_rank + 2, uni_cols);
     init_universe(universe, uni_rows_per_rank + 2, uni_cols);
-    // printf("Rank %d created local universe with %d rows.\n", mpi_myrank, uni_rows_per_rank + 2);
 
     heatmap = alloc_int_arr_2d(heatmap_rows_per_rank, heatmap_cols);
-    // printf("Rank %d created local heatmap (%d, %d).\n", mpi_myrank, heatmap_rows_per_rank, heatmap_cols);
-
-    // TODO: Launch pthreads
 
     int thread_ids[num_threads - 1];
     pthread_t tid[num_threads - 1];
@@ -186,9 +192,6 @@ int main(int argc, char *argv[]) {
         thread_ids[i] = i + 1;
         rc = pthread_create(&tid[i], NULL, threadFunction, &thread_ids[i]);
         if (rc != 0) { printf("Could not create thread"); }
-        else {
-            // printf("Created pthread - id: %d, rank: %d\n", thread_ids[i], mpi_myrank);
-        }
     }
 
     g_start_cycles = GetTimeBase();
@@ -257,15 +260,16 @@ int main(int argc, char *argv[]) {
     }
     // Clean up dynamically allocated variables
     free_bool_arr_2d(universe, uni_rows_per_rank + 2);
+    free_int_arr_2d(heatmap, heatmap_rows_per_rank);
 
-    // END -Perform a barrier and then leave MPI
+    // END - Perform a barrier and then leave MPI
     MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
     return 0;
 }
 
 /***************************************************************************/
-/* Function Implementations ************************************************/
+/* Argument Parsing ********************************************************/
 /***************************************************************************/
 
 struct prog_params parse_args(int argc, char **argv) {
@@ -319,33 +323,9 @@ void print_params(struct prog_params params) {
     printf("Threshold: %f\n", params.threshold);
 }
 
-// We can get the correct modulus for negative values using this function
-int mod(int a, int b) {
-    int r = a % b;
-    return r < 0 ? r + b : r;
-}
-
-void calculate_heatmap() {
-    for (int i = 0; i < heatmap_rows_per_rank; i++) {
-        for (int j = 0; j < heatmap_cols; j++) {
-            int start_x = heatmap_row_inc * i;
-            int start_y = heatmap_col_inc * j;
-            int stop_x = start_x + heatmap_row_inc;
-            int stop_y = start_y + heatmap_col_inc;
-            heatmap[i][j] += sum_matrix(universe, start_x, stop_x, start_y, stop_y);
-        }
-    }
-}
-
-int sum_matrix(bool **uni, int x_start, int x_stop, int y_start, int y_stop) {
-    int ret_val = 0;
-    for (int i = x_start; i < x_stop; ++i) {
-        for (int j = y_start; j < y_stop; ++j) {
-            ret_val += uni[i][j];
-        }
-    }
-    return ret_val;
-}
+/***************************************************************************/
+/* Pthread *****************************************************************/
+/***************************************************************************/
 
 void *threadFunction(void *arg) {
     int *thread_id = (int *) arg;
@@ -369,139 +349,9 @@ void *threadFunction(void *arg) {
     pthread_exit(thread_id);
 }
 
-void strreverse(char *begin, char *end) {
-    char aux;
-    while (end > begin) {
-        aux = *end, *end-- = *begin, *begin++ = aux;
-    }
-}
-
-void itoa(int value, char *str, int base) {
-    static char num[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-    char *wstr = str;
-    int sign;
-
-    // Validate base
-    if (base < 2 || base > 35) {
-        *wstr = '\0';
-        return;
-    }
-
-    // Take care of sign
-    if ((sign = value) < 0) value = -value;
-
-    // Conversion. Number is reversed.
-    do *wstr++ = num[value % base]; while (value /= base);
-    if (sign < 0) *wstr++ = '-';
-    *wstr = '\0';
-
-    // Reverse string
-    strreverse(str, wstr - 1);
-}
-
-void write_universe_to_file(char *filename, bool **uni, int rows, int cols, int rank) {
-    MPI_Status status;
-    MPI_File fh;
-    MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDWR | MPI_MODE_CREATE, MPI_INFO_NULL, &fh);
-
-    for (int i = 1; i < rows - 1; i++) {
-        int global_row_ind = i + (rank * (rows));
-        int offset = (global_row_ind * cols * 2);
-        // printf("Rank %d writing row %d with offset %d.\n", rank, i, offset);
-        MPI_File_write_at(fh, offset, uni[i], cols, MPI_UNSIGNED_SHORT, &status);
-    }
-
-    MPI_File_close(&fh);
-}
-
-void write_heatmap_to_file(char *filename, int **uni, int rows, int cols, int rank) {
-    MPI_Status status;
-    MPI_File fh;
-    MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDWR | MPI_MODE_CREATE, MPI_INFO_NULL, &fh);
-
-    for (int i = 0; i < rows; i++) {
-        int global_row_ind = i + (rank * (rows));
-        int offset = (global_row_ind * cols * 4);
-        // printf("Rank %d writing row %d with offset %d.\n", rank, i, offset);
-        MPI_File_write_at(fh, offset, uni[i], cols, MPI_INT, &status);
-    }
-
-    MPI_File_close(&fh);
-}
-
-void print_some_universe(bool **uni, int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            if (uni[i][j] == ALIVE) {
-                printf("*");
-            } else {
-                printf(" ");
-            }
-        }
-        printf("\n");
-    }
-    printf("\n");
-}
-
-void print_some_heatmap(int **uni, int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            printf(" %d ", uni[i][j]);
-        }
-        printf("\n");
-    }
-    printf("\n");
-}
-
-/*
- * Input:
- *  thresh - Value between 0.0 and 1.0. Changes the occurrence of random chance
- *          events where a cell is brought to live or killed.
- * We assume the universe is padded with 2 ghost rows, at the first and last indices.
- */
-void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thread_id, double thresh) {
-//    printf("UPDATING UNIVERSE AT RANK %d THREAD_ID %d THRESH %f\n", rank, thread_id, thresh);
-
-    // Allocate a new universe to temporarily store next universe state
-    // Row bounds for a thread to update
-    int start = (thread_id * rows_per_thread) + 1;
-    int end = start + rows_per_thread - 1;
-    if (thread_id == num_threads - 1) {
-        end = rows - 1;
-    }
-    // printf("start: %d, end: %d, rows: %d\n", start, end, rows);
-
-    // Update all cells in rows
-//    printf("For loop i=%d; i<%d\n", start, end);
-    for (int i = start; i < end && i < rows; i++) {
-        int global_row_ind = i + (rank * (rows - 2));
-//        printf("rank %d, rows %d, thread_id %d, global row_ind = %d \n", rank, rows, thread_id, global_row_ind);
-//        printf("thread: %d, rows: %d, i: %d, global_row_ind: %d\n", thread_id, rows, i, global_row_ind);
-        for (int j = 0; j < cols; j++) {
-            double random_chance = GenVal(global_row_ind);
-            if (random_chance <= thresh) {
-                new_uni[i][j] = life_lotto(global_row_ind);
-//                printf("global row index: %d, random chance\n", global_row_ind);
-            } else
-                new_uni[i][j] = cell_next_state(i, j, old_uni, rows, cols);
-        }
-    }
-
-    // Copy new universe state into existing array
-    for (int i = start; i < end && i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            old_uni[i][j] = new_uni[i][j];
-        }
-    }
-}
-
-// Coin flip: return ALIVE/DEAD with 50% chance each
-bool life_lotto(Gen seed) {
-    double chance = GenVal(seed);
-    if (chance > 0.5f)
-        return ALIVE;
-    return DEAD;
-}
+/***************************************************************************/
+/* Universe Operations *****************************************************/
+/***************************************************************************/
 
 void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks) {
     bool *tg_row = old_uni[0];
@@ -533,29 +383,74 @@ void sync_ghost_rows(bool **old_uni, int rows, int cols, int rank, int num_ranks
     // printf("Rank %d recieved bottom ghost row\n", rank);
 }
 
-int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols) {
-    int count = 0;
-    // Check all eight neighbors of input cell
-    for (int i = i_in - 1; i < i_in + 2; i++) {
-        for (int j = j_in - 1; j < j_in + 2; j++) {
-            // Verify index is:
-            //  - inside of array
-            //  - index is not "center"
-            if (i > 0 && j > 0 && i < rows && j < cols &&
-                !(j == j_in && i == i_in) && uni[i][j] == ALIVE) {
-                count++;
-            }
+void update_universe_state(bool **old_uni, int rows, int cols, int rank, int thread_id, double thresh) {
+    /*
+    * Input:
+    *  thresh - Value between 0.0 and 1.0. Changes the occurrence of random chance
+    *          events where a cell is brought to live or killed.
+    * We assume the universe is padded with 2 ghost rows, at the first and last indices.
+    */
+
+    // Allocate a new universe to temporarily store next universe state
+    // Row bounds for a thread to update
+    int start = (thread_id * rows_per_thread) + 1;
+    int end = start + rows_per_thread - 1;
+    if (thread_id == num_threads - 1) {
+        end = rows - 1;
+    }
+
+    // Update all cells
+    for (int i = start; i < end && i < rows; i++) {
+        int global_row_ind = i + (rank * (rows - 2));
+        for (int j = 0; j < cols; j++) {
+            double random_chance = GenVal(global_row_ind);
+            if (random_chance <= thresh) {
+                new_uni[i][j] = life_lotto(global_row_ind);
+            } else
+                new_uni[i][j] = cell_next_state(i, j, old_uni, rows, cols);
         }
     }
-    return count;
+
+    // Copy new universe state into existing array
+    for (int i = start; i < end && i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            old_uni[i][j] = new_uni[i][j];
+        }
+    }
 }
 
-// 
+void init_universe(bool **uni, int rows, int cols) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            uni[i][j] = ALIVE;
+        }
+    }
+}
+
+// Coin flip: return ALIVE/DEAD with 50% chance each
+bool life_lotto(Gen seed) {
+    double chance = GenVal(seed);
+    if (chance > 0.5f)
+        return ALIVE;
+    return DEAD;
+}
+
+
 bool cell_next_state(int i, int j, bool **uni, int rows, int cols) {
-    // • Any live cell with fewer than two live neighbors dies, as if caused by under-population.
-    // • Any live cell with more than three live neighbors dies, as if by over-population.
-    // • Any live cell with two or three live neighbors lives on to the next generation.
-    // • Any dead cell with exactly three live neighbors becomes a live cell, as if by reproduction
+    /* Rules:
+    *
+    * - Any live cell with fewer than two live neighbors dies, as if caused
+    * by under-population.
+    * 
+    * - Any live cell with more than three live neighbors dies, as if by
+    * over-population.
+    * 
+    * - Any live cell with two or three live neighbors lives on to the next
+    * generation.
+    * 
+    * - Any dead cell with exactly three live neighbors becomes a live cell, as
+    * if by reproduction
+    */
     int neighbors = neighbor_count(i, j, uni, rows, cols);
     int is_alive = uni[i][j];
     if (is_alive == ALIVE) {
@@ -570,12 +465,124 @@ bool cell_next_state(int i, int j, bool **uni, int rows, int cols) {
     return is_alive;
 }
 
-void init_universe(bool **uni, int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            uni[i][j] = ALIVE;
+int neighbor_count(int i_in, int j_in, bool **uni, int rows, int cols) {
+    int count = 0;
+    // Check all eight neighbors of input cell
+    for (int i = i_in - 1; i < i_in + 2; i++) {
+        for (int j = j_in - 1; j < j_in + 2; j++) {
+            // Verify index is:
+            //  - inside of array
+            //  - index is not "center": (i_in, j_in)
+            if (i > 0 && j > 0 && i < rows && j < cols &&
+                !(j == j_in && i == i_in) && uni[i][j] == ALIVE) {
+                count++;
+            }
         }
     }
+    return count;
+}
+
+void print_some_universe(bool **uni, int rows, int cols) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            if (uni[i][j] == ALIVE) {
+                printf("*");
+            } else {
+                printf(" ");
+            }
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+
+void write_universe_to_file(char *filename, bool **uni, int rows, int cols, int rank) {
+    MPI_Status status;
+    MPI_File fh;
+    MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDWR | MPI_MODE_CREATE, MPI_INFO_NULL, &fh);
+
+    for (int i = 1; i < rows - 1; i++) {
+        // printf("%d\n", rows-2);
+        int global_row_ind = (i - 1) + (rank * (rows-2));
+        int offset = (global_row_ind * cols * 2);
+        // printf("Rank %d writing row %d with offset %d.\n", rank, i, offset);
+        MPI_File_write_at(fh, offset, uni[i], cols, MPI_UNSIGNED_SHORT, &status);
+    }
+
+    MPI_File_close(&fh);
+}
+
+
+/***************************************************************************/
+/* Heatmap Operations ******************************************************/
+/***************************************************************************/
+
+void calculate_heatmap() {
+    for (int i = 0; i < heatmap_rows_per_rank; i++) {
+        for (int j = 0; j < heatmap_cols; j++) {
+            int start_x = heatmap_row_inc * i;
+            int start_y = heatmap_col_inc * j;
+            int stop_x = start_x + heatmap_row_inc;
+            int stop_y = start_y + heatmap_col_inc;
+            heatmap[i][j] += sum_matrix(universe, start_x, stop_x, start_y, stop_y);
+        }
+    }
+}
+
+int sum_matrix(bool **uni, int x_start, int x_stop, int y_start, int y_stop) {
+    int ret_val = 0;
+    for (int i = x_start; i > 0 && i < uni_rows_per_rank + 1 && i < x_stop; ++i) {
+        for (int j = y_start; j < y_stop; ++j) {
+            ret_val += uni[i][j];
+        }
+    }
+    return ret_val;
+}
+
+void print_some_heatmap(int **uni, int rows, int cols) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            printf(" %d ", uni[i][j]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+void write_heatmap_to_file(char *filename, int **uni, int rows, int cols, int rank) {
+    MPI_Status status;
+    MPI_File fh;
+    MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDWR | MPI_MODE_CREATE, MPI_INFO_NULL, &fh);
+
+    for (int i = 0; i < rows; i++) {
+        int global_row_ind = i + (rank * (rows));
+        int offset = (global_row_ind * cols * 4);
+        // printf("Rank %d writing row %d with offset %d.\n", rank, i, offset);
+        MPI_File_write_at(fh, offset, uni[i], cols, MPI_INT, &status);
+    }
+
+    MPI_File_close(&fh);
+}
+
+
+/***************************************************************************/
+/* Alloc/Free 2D Array Funcs ***********************************************/
+/***************************************************************************/
+
+int **alloc_int_arr_2d(int rows, int cols) {
+    int **uni = (int **) calloc(rows, sizeof(int *));
+    for (int i = 0; i < rows; i++) {
+        uni[i] = (int *) calloc(cols, sizeof(int));
+    }
+    return uni;
+}
+
+void free_int_arr_2d(int **uni, int rows) {
+    for (int i = 0; i < rows; i++) {
+        free(uni[i]);
+    }
+    free(uni);
 }
 
 bool **alloc_bool_arr_2d(int rows, int cols) {
@@ -586,17 +593,50 @@ bool **alloc_bool_arr_2d(int rows, int cols) {
     return uni;
 }
 
-int **alloc_int_arr_2d(int rows, int cols) {
-    int **uni = (int **) calloc(rows, sizeof(int *));
-    for (int i = 0; i < rows; i++) {
-        uni[i] = (int *) calloc(cols, sizeof(int));
-    }
-    return uni;
-}
-
 void free_bool_arr_2d(bool **uni, int rows) {
     for (int i = 0; i < rows; i++) {
         free(uni[i]);
     }
     free(uni);
+}
+
+
+/***************************************************************************/
+/* Helper Functions ********************************************************/
+/***************************************************************************/
+
+int mod(int a, int b) {
+    // We can get the correct modulus for negative values using this function
+    int r = a % b;
+    return r < 0 ? r + b : r;
+}
+
+void strreverse(char *begin, char *end) {
+    char aux;
+    while (end > begin) {
+        aux = *end, *end-- = *begin, *begin++ = aux;
+    }
+}
+
+void itoa(int value, char *str, int base) {
+    static char num[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    char *wstr = str;
+    int sign;
+
+    // Validate base
+    if (base < 2 || base > 35) {
+        *wstr = '\0';
+        return;
+    }
+
+    // Take care of sign
+    if ((sign = value) < 0) value = -value;
+
+    // Conversion. Number is reversed.
+    do *wstr++ = num[value % base]; while (value /= base);
+    if (sign < 0) *wstr++ = '-';
+    *wstr = '\0';
+
+    // Reverse string
+    strreverse(str, wstr - 1);
 }
